@@ -45,6 +45,7 @@ Installation
           --sink arg            choose a different sink than the default
           --source arg          choose a different source than the default
           --default-source      select the default source
+          --get-default-sink    get default sink
           --get-volume          get the current volume
           --get-volume-human    get the current volume percentage or the string "muted"
           --set-volume arg      set the volume
