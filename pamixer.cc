@@ -90,6 +90,7 @@ int main(int argc, char* argv[])
         ("sink", po::value(&sink_name), "choose a different sink than the default")
         ("source", po::value(&source_name), "choose a different source than the default")
         ("default-source", "select the default source")
+        ("get-default-sink", "show default sink")
         ("get-volume", "get the current volume")
         ("get-volume-human", "get the current volume percentage or the string \"muted\"")
         ("set-volume", po::value<int>(&value), "set the volume")
@@ -185,6 +186,13 @@ int main(int argc, char* argv[])
             cout << boolalpha << device.mute << '\n';
             ret = !device.mute;
         } else {
+            if (vm.count("get-default-sink")) {
+                cout << "Default sink:\n";
+                auto sink =  pulse.get_default_sink();
+                    cout << sink.index << " \""
+                         << sink.name << "\" \""
+                         << sink.description << "\"\n";
+            }
             if (vm.count("list-sinks")) {
                 cout << "Sinks:\n";
                 for (const Device& sink : pulse.get_sinks()) {
