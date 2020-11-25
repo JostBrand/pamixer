@@ -18,9 +18,6 @@
 #include "pulseaudio.hh"
 #include "device.hh"
 
-#include <boost/program_options.hpp>
-namespace po = boost::program_options;
-
 #include <cmath>
 #include <list>
 #include <string>
@@ -28,37 +25,23 @@ namespace po = boost::program_options;
 using namespace std;
 
 #include <pulse/pulseaudio.h>
+#include <CLI/CLI.hpp>
+//Flags and options variables
+std::string opt_sink;
+std::string opt_source;
+int opt_volume_set;
+int opt_volume_inc;
+int opt_volume_dec;
+double opt_gamma;
 
 
 
-void conflicting_options(const po::variables_map& vm, const char* opt1, const char* opt2);
-Device get_selected_device(Pulseaudio& pulse, po::variables_map vm, string sink_name, string source_name);
+
+Device get_selected_device(Pulseaudio& pulse,CLI::Option *po_sink,CLI::Option* po_default_source,CLI::Option* po_source);
 int gammaCorrection(int i, double gamma, int delta);
 int main(int argc, char* argv[]);
 
 
-
-/* Function used to check that 'opt1' and 'opt2' are not specified
-   at the same time. */
-void conflicting_options(const po::variables_map& vm, const char* opt1, const char* opt2) {
-    if (vm.count(opt1) && !vm[opt1].defaulted()
-        && vm.count(opt2) && !vm[opt2].defaulted()) {
-
-        throw logic_error(string("Conflicting options '") + opt1 + "' and '" + opt2 + "'.");
-    }
-}
-
-Device get_selected_device(Pulseaudio& pulse, po::variables_map vm, string sink_name, string source_name) {
-    Device device = pulse.get_default_sink();
-    if (vm.count("sink")) {
-        device = pulse.get_sink(sink_name);
-    } else if (vm.count("default-source")) {
-        device = pulse.get_default_source();
-    } else if (vm.count("source")) {
-        device = pulse.get_source(source_name);
-    }
-    return device;
-}
 
 pa_volume_t gammaCorrection(pa_volume_t i, double gamma, int delta) {
     double j = double(i);
@@ -80,120 +63,110 @@ pa_volume_t gammaCorrection(pa_volume_t i, double gamma, int delta) {
 
 int main(int argc, char* argv[])
 {
-    string sink_name, source_name;
-    int value;
-    double gamma;
 
-    po::options_description options("Allowed options");
-    options.add_options()
-        ("help,h", "help message")
-        ("sink", po::value(&sink_name), "choose a different sink than the default")
-        ("source", po::value(&source_name), "choose a different source than the default")
-        ("default-source", "select the default source")
-        ("get-default-sink", "show default sink")
-        ("get-volume", "get the current volume")
-        ("get-volume-human", "get the current volume percentage or the string \"muted\"")
-        ("set-volume", po::value<int>(&value), "set the volume")
-        ("increase,i", po::value<int>(&value), "increase the volume")
-        ("decrease,d", po::value<int>(&value), "decrease the volume")
-        ("toggle-mute,t", "switch between mute and unmute")
-        ("mute,m", "set mute")
-        ("allow-boost", "allow volume to go above 100%")
-        ("gamma", po::value<double>(&gamma)->default_value(1.0), "increase/decrease using gamma correction e.g. 2.2")
-        ("unmute,u", "unset mute")
-        ("get-mute", "display true if the volume is mute, false otherwise")
-        ("list-sinks", "list the sinks")
-        ("list-sources", "list the sources")
-        ;
+    CLI::App app("pamixer");
 
-    try
-    {
-        po::variables_map vm;
-        po::store(po::parse_command_line(argc, argv, options), vm);
-        po::notify(vm);
+    //PO stands for pointer to option - It is needed to modify options later on
+    auto po_sink = app.add_option("--sink", opt_sink, "choose a different sink than the default");
+    auto po_source = app.add_option("--source", opt_source, "choose a different source than the default");
+    auto po_default_source = app.add_flag("--default-source","select the default source");
+    auto po_get_default_sink=app.add_flag("--get-default-sink","show default sink");
+    auto po_get_volume = app.add_flag("--get-volume","get the current volume");
+    auto po_get_volume_human=app.add_flag("--get-volume-human","get the current volume percentage or the string \"muted\"");
+    auto po_set_volume=app.add_option("--set-volume",opt_volume_set,"set the volume");
+    auto po_increase = app.add_option("--increase,-i",opt_volume_inc,"increase the volume");
+    auto po_decrease= app.add_option("--decrease,-d",opt_volume_dec,"decrease the volume");
+    auto po_toggle_mute= app.add_flag("--toggle-mute,-t","switch between mute and unmute");
+    auto po_mute=    app.add_flag("--mute,-m","set mute");
+    auto po_allow_boost=    app.add_flag("--allow-boost","allow volume to go above 100%");
+    auto po_gamma =    app.add_option("--gamma",opt_gamma,"increse/decrease using gamma correction e.g. 2.2");
+    auto po_unmute =    app.add_flag("--unmute,-u","unset mute");
+    auto po_get_mute = app.add_flag("--get-mute","display true if muted false otherwise");
+    auto po_list_sinks = app.add_flag("--list-sinks","list the sinks");
+    auto po_list_sources = app.add_flag("--list-sources","list the sources");
 
-        if (vm.count("help") || vm.size() < 2) {
-            cout << options << endl;
-            return 0;
-        }
+    //Conflicting Options and requirements
+    po_set_volume->excludes(po_increase);
+    po_set_volume->excludes(po_decrease);
+    po_decrease->excludes(po_increase);
+    po_toggle_mute->excludes(po_mute);
+    po_toggle_mute->excludes(po_unmute);
+    po_unmute->excludes(po_mute);
+    po_sink->excludes(po_source);
+    po_sink->excludes(po_default_source);
+    po_get_volume->excludes(po_list_sinks);
+    po_get_volume->excludes(po_list_sources);
+    po_get_volume->excludes(po_get_volume_human);
+    po_get_volume_human->excludes(po_list_sinks);
+    po_get_volume_human->excludes(po_list_sources);
+    po_get_volume_human->excludes(po_mute);
+    po_mute->excludes(po_list_sinks);
+    po_mute->excludes(po_list_sources);
 
-        conflicting_options(vm, "set-volume", "increase");
-        conflicting_options(vm, "set-volume", "decrease");
-        conflicting_options(vm, "decrease", "increase");
-        conflicting_options(vm, "toggle-mute", "mute");
-        conflicting_options(vm, "toggle-mute", "unmute");
-        conflicting_options(vm, "unmute", "mute");
-        conflicting_options(vm, "sink", "source");
-        conflicting_options(vm, "sink", "default-source");
-        conflicting_options(vm, "get-volume", "list-sinks");
-        conflicting_options(vm, "get-volume", "list-sources");
-        conflicting_options(vm, "get-volume", "get-volume-human");
-        conflicting_options(vm, "get-volume-human", "list-sinks");
-        conflicting_options(vm, "get-volume-human", "list-sources");
-        conflicting_options(vm, "get-volume-human", "get-mute");
-        conflicting_options(vm, "get-mute", "list-sinks");
-        conflicting_options(vm, "get-mute", "list-sources");
+    po_set_volume->expected(0,2);
+    po_increase->expected(0,1);
+    po_decrease->expected(0,1);
+    po_gamma->default_val(1.0);
 
-        Pulseaudio pulse("pamixer");
-        Device device = get_selected_device(pulse, vm, sink_name, source_name);
+    CLI11_PARSE(app, argc, argv);
 
-        if (vm.count("set-volume") || vm.count("increase") || vm.count("decrease")) {
-            if (value < 0) {
-                value = 0;
-            }
+    Pulseaudio pulse("pamixer");
+    Device device = get_selected_device(pulse,po_sink,po_default_source,po_source);
+
+        if (opt_volume_set || opt_volume_inc || opt_volume_dec) {
 
             pa_volume_t new_value = 0;
-            if (vm.count("set-volume")) {
-                new_value = round( (double)value * (double)PA_VOLUME_NORM / 100.0);
-            } else if (vm.count("increase")) {
-                new_value = gammaCorrection(device.volume_avg, gamma,  value);
-            } else if (vm.count("decrease")) {
-                new_value = gammaCorrection(device.volume_avg, gamma, -value);
+            if (opt_volume_set) {
+                new_value = round( (double)opt_volume_set * (double)PA_VOLUME_NORM / 100.0);
+            } else if (opt_volume_inc) {
+                new_value = gammaCorrection(device.volume_avg, opt_gamma,  opt_volume_inc);
+            } else if (opt_volume_dec) {
+                new_value = gammaCorrection(device.volume_avg, opt_gamma, -opt_volume_dec);
             }
 
-            if (!vm.count("allow-boost") && new_value > PA_VOLUME_NORM) {
+            if (!*po_allow_boost && new_value > PA_VOLUME_NORM) {
                 new_value = PA_VOLUME_NORM;
             }
 
             pulse.set_volume(device, new_value);
-            device = get_selected_device(pulse, vm, sink_name, source_name);
+            device = get_selected_device(pulse,po_sink,po_default_source,po_source);
         }
 
-        if (vm.count("toggle-mute") || vm.count("mute") || vm.count("unmute")) {
-            if (vm.count("toggle-mute")) {
+        if (*po_toggle_mute || *po_mute || *po_unmute) {
+            if (*po_toggle_mute) {
                 pulse.set_mute(device, !device.mute);
             } else {
-                pulse.set_mute(device, vm.count("mute") || !vm.count("unmute"));
+                pulse.set_mute(device, *po_mute || !*po_unmute);
             }
-            device = get_selected_device(pulse, vm, sink_name, source_name);
+            device = get_selected_device(pulse,po_sink,po_default_source,po_source);
         }
 
         int ret = 0;
-        if (vm.count("get-volume") && vm.count("get-mute")) {
+        if (*po_get_volume && *po_mute) {
             cout << boolalpha << device.mute << ' ' << device.volume_percent << '\n';
             ret = !device.mute;
-        } else if (vm.count("get-volume")) {
+        } else if (*po_get_volume) {
             cout << device.volume_percent << '\n';
             ret = device.volume_percent <= 0;
-        } else if (vm.count("get-volume-human")) {
+        } else if (*po_get_volume_human) {
             if (device.mute) {
                 cout << "muted\n";
             } else {
                 cout << device.volume_percent << "%\n";
             }
             ret = (device.volume_percent <= 0) || device.mute;
-        } else if (vm.count("get-mute")) {
+        } else if (*po_get_mute) {
             cout << boolalpha << device.mute << '\n';
             ret = !device.mute;
         } else {
-            if (vm.count("get-default-sink")) {
+            if (*po_get_default_sink) {
                 cout << "Default sink:\n";
                 auto sink =  pulse.get_default_sink();
                     cout << sink.index << " \""
                          << sink.name << "\" \""
                          << sink.description << "\"\n";
             }
-            if (vm.count("list-sinks")) {
+            if (*po_list_sinks) {
                 cout << "Sinks:\n";
                 for (const Device& sink : pulse.get_sinks()) {
                     cout << sink.index << " \""
@@ -201,7 +174,7 @@ int main(int argc, char* argv[])
                          << sink.description << "\"\n";
                 }
             }
-            if (vm.count("list-sources")) {
+            if (*po_list_sources) {
                 cout << "Sources:\n";
                 for (const Device& source : pulse.get_sources()) {
                     cout << source.index << " \""
@@ -212,16 +185,17 @@ int main(int argc, char* argv[])
         }
 
         return ret;
-    }
-    catch (const char* message)
-    {
-        cerr << message << '\n';
-        return 3;
-    }
-    catch (const std::exception& e)
-    {
-        cerr << argv[0] << ": " << e.what() << "\n\n";
-        cerr << options << '\n';
-        return 2;
-    }
+    
 }
+Device get_selected_device(Pulseaudio& pulse,CLI::Option *po_sink,CLI::Option* po_default_source,CLI::Option* po_source) {
+    Device device = pulse.get_default_sink();
+    if (*po_sink) {
+        device = pulse.get_sink(opt_sink);
+    } else if (*po_default_source) {
+        device = pulse.get_default_source();
+    } else if (*po_source) {
+        device = pulse.get_source(opt_source);
+    }
+    return device;
+}
+
