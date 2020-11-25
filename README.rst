@@ -21,7 +21,7 @@ Dependencies
 ------------
 
 * libpulse
-* CLI11 ~~boost-program_options~~ 
+* CLI11
 
 Installation
 ------------
